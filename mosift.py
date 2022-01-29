@@ -1,108 +1,126 @@
 import cv2
+from cv2 import add
+from matplotlib.pyplot import axis
 import numpy as np
-import scipy.ndimage.filters as fi
-from skimage.feature import peak_local_max
 import math
+from sklearn.cluster import KMeans
 
-def gkern(kernlen=21, nsig=3):
-    inp = np.zeros((kernlen, kernlen))
-    inp[kernlen//2, kernlen//2] = 1
-    return fi.gaussian_filter(inp, nsig)
+import json
+import os
+import glob
 
-cap = cv2.VideoCapture("./KTH/boxing.zip_dir/person01_boxing_d1_uncomp.avi")
-frame_idx = 0
-last_frame = 0
-original_resolution = 128
-resolution_step = 4
-s = 1
-sample_count = s + 3
-delta = np.power(2, 1/s)
+def get_mosift_features(cap):
+    frame_idx = 0
+    last_frame = 0
+    original_resolution = 128
+    resolution_step = 4
+    s = 1
+    sample_count = s + 3
+    delta = np.power(2, 1/s)
+    X = []
 
-while(cap.isOpened()):
-    ret, frame = cap.read()
+    while(cap.isOpened()):
+        ret, frame = cap.read()
 
-    if ret == True:
-        # Prepare
-        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        frame = cv2.resize(frame, (original_resolution, original_resolution))
-        octaves = []
-        agg_test = []
+        if ret == True:
+            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            frame = cv2.resize(frame, (128, 128))
 
-        # ---------------------------------------------------------------------------- #
-        #                             DoG for First Octave                             #
-        # ---------------------------------------------------------------------------- #
-        # create different levels of gaussians
-        intervals = []
-        for i in range(sample_count):
-            kernel = gkern(3, delta * i)
-            g_frame = cv2.filter2D(frame, -1, kernel)
-            intervals.append(g_frame)
-        
-        # DoG
-        dogs = []
-        aggregated = np.zeros(frame.shape)
-        for i in range(1, sample_count):
-            diff = cv2.absdiff(intervals[i - 1], intervals[i])
-            if i == 1:
-                agg_test = diff
-            dogs.append(diff)
+            sift = cv2.SIFT_create()
+            keypoints, des = sift.detectAndCompute(frame ,None)
+            
+            # ---------------------------------------------------------------------------- #
+            #                               Describe Features                              #
+            # ---------------------------------------------------------------------------- #
+            exibitional = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
+            if frame_idx > 0:
+                flow = cv2.calcOpticalFlowFarneback(last_frame, frame, None, 0.5, 3, 3, 3, 5, 1.2, 0)
 
-        # create an octave
-        octaves.append(dogs)
-        
-        # ---------------------------------------------------------------------------- #
-        #                                Find Keypoints                                #
-        # ---------------------------------------------------------------------------- #
-        peaks_array = []
-        for dog in octaves:
-            peaks = peak_local_max(dog)
-            peaks_array.append(peaks)
+                descriptors = []
+                for kp_idx, kp in enumerate(keypoints):
+                    x = kp.pt[0]
+                    y = kp.pt[1]
 
-        mask = np.zeros_like(frame)
+                    x = int(x)
+                    y = int(y)
 
-        # ---------------------------------------------------------------------------- #
-        #                                 Temporal Part                                #
-        # ---------------------------------------------------------------------------- #
-        if frame_idx > 0:
-            diff = cv2.absdiff(last_frame, frame)
-            o = 0
-            for peaks in peaks_array:
-                for idx in peaks:
-                    x = idx[0]
-                    y = idx[1]
-                    flag = False
-
-                    pixel_value = octaves[o][x][y]
-
-                    # Check local maxima against other octaves
-                    dog_idx = -1
-                    for dog in octaves:
-                        dog_idx += 1
-                        if(dog_idx == o):
-                            continue
-
-                        if(dog[x][y] > pixel_value):
-                            flag = True
-                            break
+                    if(x < 16 or y < 16 or x > 110 or y > 110):
+                        continue
                     
-                    if(flag):
-                        break
+                    motion_histogram = []
+                    mag_sum = 0
+                    for i in range(-2, 2):
+                        for j in range(-2, 2):
+                            bin = [0, 0, 0, 0, 0, 0, 0, 0]
+                            s1 = x + (i * 4)
+                            e1 = x + (i * 4) + 4
+                            s2 = y + (j * 4)
+                            e2 = y + (j * 4) + 4
+                            for fp in flow[s1:e1]:
+                                for f in fp[s2:e2]:
+                                    flow_x = f[0]
+                                    flow_y = f[1]
+                                    mag = math.sqrt(flow_x ** 2 + flow_y ** 2)
+                                    mag_sum += mag
+                                    angle = math.degrees(math.atan2(flow_y, flow_x))
+                                    idx = int(angle / 45)
+                                    if angle < 0:
+                                        idx = int((360 + angle) / 45)
+                                    bin[idx] += mag
+                            motion_histogram.append(bin)
+                    
+                    if(mag_sum > 5):
+                        mh = np.array(motion_histogram, dtype=np.float32)
+                        mh = np.reshape(mh, (128,))
+                        d = np.array(des[kp_idx])
+                        d = np.concatenate([d, mh])
 
-                    if(diff[x][y] > 50):
-                        mask[x][y] += 255
+                        descriptors.append(d)
 
-                cv2.imshow('features', agg_test)
-                cv2.imshow('frame', frame)
-                o += 1
+                
+                cv2.imshow('frame', exibitional)
+                X = X + descriptors
 
-        if cv2.waitKey(25) & 0xFF == ord('q'):
+            if cv2.waitKey(25) & 0xFF == ord('q'):
+                break
+
+            last_frame = frame
+            frame_idx += 1
+            ms = cap.get(cv2.CAP_PROP_POS_MSEC)
+            if(ms > 4000):
+                break
+
+        else:
+            # cap.set(cv2.CAP_PROP_POS_MSEC, 0)
+            # done processing the video
             break
+    
+    X = np.array(X)
 
-        last_frame = frame
-        frame_idx += 1
+    try:
+        kmeans = KMeans(n_clusters=16, random_state=0).fit(X)
+        centers = kmeans.cluster_centers_
 
-    else:
-        cap.set(cv2.CAP_PROP_POS_MSEC, 0)
+        cap.release()
+        cv2.destroyAllWindows()
+        return centers
+    except:
+        return np.array([])
 
-cap.release()
-cv2.destroyAllWindows()
+feature_array = []
+
+def process(fname, i):
+    for filename in glob.glob('./{fname}/*.avi'.format(fname=fname)):
+        cap = cv2.VideoCapture(os.path.join(os.getcwd(), filename))
+        features = get_mosift_features(cap)
+        f = features.tolist()
+        if len(f) > 0:
+            feature_array.append(f)
+
+    with open('{i}.json'.format(i=i), 'w', newline = '\n') as jsonfile:
+        json.dump(feature_array, jsonfile)
+
+i = 0
+for filename in glob.glob('KTH/*'):
+    process(filename, i)
+    i += 1
