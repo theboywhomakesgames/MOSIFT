@@ -42,7 +42,7 @@ for action in data:
     a = []
     for feature in action:
         feature = np.array(feature)
-        feature = np.reshape(feature, (4096))
+        feature = np.reshape(feature, (64, 64))
         a.append(feature)
     X.append(a)
 
@@ -64,8 +64,8 @@ for epoch in range(12):
             f_index = random.randrange(0, len(X[label]) // 50) + len(X[label])//50
             inputs = X[label][f_index]
             img = np.array(inputs)
-            #cv2.imshow('img', img)
-            #cv2.waitKey(0)
+            cv2.imshow('img', img)
+            cv2.waitKey(0)
             inputs = np.expand_dims(inputs, 0)
             x.append(inputs)
             l.append(label)

@@ -69,7 +69,8 @@ def get_mosift_features(cap):
                                     bin[idx] += mag
                             motion_histogram.append(bin)
                     
-                    if(mag_sum > 5):
+                    if(mag_sum > 30):
+                        exibitional = cv2.circle(exibitional, (x, y), 5, (255, 255, 0))
                         mh = np.array(motion_histogram, dtype=np.float32)
                         mh = np.reshape(mh, (128,))
                         d = np.array(des[kp_idx])
@@ -87,7 +88,7 @@ def get_mosift_features(cap):
             last_frame = frame
             frame_idx += 1
             ms = cap.get(cv2.CAP_PROP_POS_MSEC)
-            if(ms > 4000):
+            if(ms > 3000):
                 break
 
         else:
