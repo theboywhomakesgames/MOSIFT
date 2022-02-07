@@ -1,23 +1,31 @@
+from fnmatch import fnmatch
 import cv2
 from cv2 import add
+from cv2 import sqrt
 from matplotlib.pyplot import axis
 import numpy as np
 import math
-from sklearn.cluster import KMeans
+from sklearn.cluster import KMeans, MeanShift
+from numba import jit
 
 import json
 import os
 import glob
+from pathlib import Path
 
-def get_mosift_features(cap):
-    frame_idx = 0
-    last_frame = 0
-    original_resolution = 128
-    resolution_step = 4
-    s = 1
-    sample_count = s + 3
-    delta = np.power(2, 1/s)
-    X = []
+def get_mosift_features(
+        cap,
+        frame_idx = 0,
+        last_frame = 0,
+        original_resolution = 128,
+        resolution_step = 4,
+        s = 1,
+        sample_count = 4,
+        delta = 2,
+        X = []
+    ):
+
+    hof = np.zeros([original_resolution, original_resolution, 3])
 
     while(cap.isOpened()):
         ret, frame = cap.read()
@@ -49,38 +57,49 @@ def get_mosift_features(cap):
                     
                     motion_histogram = []
                     mag_sum = 0
-                    for i in range(-2, 2):
-                        for j in range(-2, 2):
+                    for i in range(-1, 1):
+                        for j in range(-1, 1):
                             bin = [0, 0, 0, 0, 0, 0, 0, 0]
                             s1 = x + (i * 4)
                             e1 = x + (i * 4) + 4
                             s2 = y + (j * 4)
                             e2 = y + (j * 4) + 4
-                            for fp in flow[s1:e1]:
-                                for f in fp[s2:e2]:
+                            for ii, fp in enumerate(flow[s1:e1]):
+                                for jj, f in enumerate(fp[s2:e2]):
+                                    iii = s1 + ii
+                                    jjj = s2 + jj
+                                            
                                     flow_x = f[0]
                                     flow_y = f[1]
-                                    mag = math.sqrt(flow_x ** 2 + flow_y ** 2)
-                                    mag_sum += mag
-                                    angle = math.degrees(math.atan2(flow_y, flow_x))
-                                    idx = int(angle / 45)
-                                    if angle < 0:
-                                        idx = int((360 + angle) / 45)
-                                    bin[idx] += mag
+                                    # mag = math.sqrt(flow_x ** 2 + flow_y ** 2)
+                                    # mag_sum += mag
+                                    # angle = math.degrees(math.atan2(flow_y, flow_x))
+                                    # idx = int(angle / 45)
+                                    # if angle < 0:
+                                    #     idx = int((360 + angle) / 45)
+                                    # bin[idx] += mag
+                                    p = 2
+                                    div = abs(math.pow((ii ** p + jj ** p), 1/p)) + 0.1
+                                    div *= 50
+                                    hof[jjj][iii][0] += abs(flow_x / div)
+                                    hof[jjj][iii][1] += abs(flow_y / div)
+
                             motion_histogram.append(bin)
                     
-                    if(mag_sum > 30):
-                        exibitional = cv2.circle(exibitional, (x, y), 5, (255, 255, 0))
-                        mh = np.array(motion_histogram, dtype=np.float32)
-                        mh = np.reshape(mh, (128,))
-                        d = np.array(des[kp_idx])
-                        d = np.concatenate([d, mh])
+                    # if has sufficient motion, add to points
+                    # if(mag_sum > 30):
+                    #     exibitional = cv2.circle(exibitional, (x, y), 5, (255, 255, 0))
+                    #     mh = np.array(motion_histogram, dtype=np.float32)
+                    #     mh = np.reshape(mh, (128,))
+                    #     d = np.array(des[kp_idx])
+                    #     d = np.concatenate([[x, y], d, mh])
 
-                        descriptors.append(d)
+                    #     descriptors.append(d)
 
                 
-                cv2.imshow('frame', exibitional)
-                X = X + descriptors
+                # cv2.imshow('frame', exibitional)
+                cv2.imshow('hof', hof)
+                #X = X + descriptors
 
             if cv2.waitKey(25) & 0xFF == ord('q'):
                 break
@@ -96,30 +115,37 @@ def get_mosift_features(cap):
             # done processing the video
             break
     
-    X = np.array(X)
-
-    try:
-        kmeans = KMeans(n_clusters=16, random_state=0).fit(X)
-        centers = kmeans.cluster_centers_
-
-        cap.release()
-        cv2.destroyAllWindows()
-        return centers
-    except:
-        return np.array([])
+    #X = np.array(X)
+    return hof
 
 feature_array = []
 
 def process(fname, i):
+    i = 0
     for filename in glob.glob('./{fname}/*.avi'.format(fname=fname)):
         cap = cv2.VideoCapture(os.path.join(os.getcwd(), filename))
-        features = get_mosift_features(cap)
-        f = features.tolist()
-        if len(f) > 0:
-            feature_array.append(f)
+        hof = get_mosift_features(cap)
+        path = './hofs/{fname}/{pname}.jpg'.format(fname=fname, pname=i)
+        i += 1
+        hof *= 255
+        cv2.imwrite(path, hof)
+        # try:
+        #     newX = X[:][:2]
+        #     kmeans = MeanShift().fit()
+        #     centers = kmeans.cluster_centers_
 
-    with open('{i}.json'.format(i=i), 'w', newline = '\n') as jsonfile:
-        json.dump(feature_array, jsonfile)
+        #     cap.release()
+        #     cv2.destroyAllWindows()
+        #     features = centers
+        # except:
+        #     features = np.array([])
+
+    #     f = features.tolist()
+    #     if len(f) > 0:
+    #         feature_array.append(f)
+
+    # with open('{i}.json'.format(i=i), 'w', newline = '\n') as jsonfile:
+    #     json.dump(feature_array, jsonfile)
 
 i = 0
 for filename in glob.glob('KTH/*'):
